@@ -104,7 +104,7 @@ function create() {
 
    this.bustText = this.add.text(16, 16, 'Deal', { fontSize: '32px', fill: '#0000FF' })
       .setInteractive()
-      .on('pointerdown', () => {console.log('Deal'); this.socket.emit('newHand')});
+      .on('pointerdown', () => {console.log('Deal'); this.socket.emit('placeBet', 100)});
    
    // Deal hands
    this.socket.on('dealHands', (players, dealer) => {
@@ -186,8 +186,8 @@ function dealHands(self, players, dealer) {
       Object.keys(players).forEach(function (id) {
          dealCard(self, players[id], players[id].hands[0].cards[i], 0);
       });
-      if (i === 0) dealCard(self, dealer, dealer.hands[0].cards[i], 0);
-      else dealHiddenCard(self, dealer);
+      if (i === 0) dealHiddenCard(self, dealer);
+      else dealCard(self, dealer, dealer.hands[0].cards[i], 0);
    }
 }
 

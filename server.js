@@ -5,6 +5,7 @@ const server = require('http').Server(app);
 const io = require('socket.io')(server);
 
 const rooms = {};
+var defaultRooms = [];
 
  /**
   * Will connect a socket to a specified room
@@ -33,6 +34,9 @@ const leaveRooms = (socket) => {
       if (room.players[socket.id]) {
          socket.leave(id);
          // remove the socket from the room
+         if (room.positions[room.players[socket.id].pos] === room.turn.pos) {
+            nextTurn(room);  
+         }
          room.positions[room.players[socket.id].pos] = {
             playerId : null,
             hasPlayer : false
@@ -40,9 +44,9 @@ const leaveRooms = (socket) => {
          delete room.players[socket.id];
       }
       // Prepare to delete any rooms that are now empty
-      if (room.players.length == 0) {
+      if (room.players.length == 0 && !(room.id in defaultRooms)) {
          roomsToDelete.push(room);
-     }
+      }
    }
  
    // Delete all the empty rooms that we found earlier
@@ -52,7 +56,6 @@ const leaveRooms = (socket) => {
 };
 
 const maxSeats = 5;
-const positions = [];
 const shoeSize = 6;
 const dealer = { pos: maxSeats, hands: [{cards: [], total: 0}]};
 const suits = ['spades', 'diamonds', 'clubs', 'hearts'];
@@ -74,7 +77,10 @@ io.on('connection', function (socket) {
    let player = {
       playerId: socket.id,
       pos: null,
-      hands: [{cards: [], total: 0}]
+      hands: [{cards: [], total: 0}],
+      money: 1000,
+      betPlaced: false,
+      betAmount: 0
    };
    let room;
 
@@ -100,16 +106,21 @@ io.on('connection', function (socket) {
    });
 
    socket.on('setPos', (pos) => {
-      console.log('setPos');
       setPos(room, pos, socket.id);
       // Update all other players of the new player
       socket.to(socket.roomId).emit('newPlayer', room.players[socket.id]);
    });
 
    // Deal hands
-   socket.on('newHand', () => {
-      console.log('newHand');
-      newHand(room);
+   socket.on('placeBet', (bet) => {
+      console.log('betPlaced');
+      room.players[socket.id].betPlaced = true;
+      room.players[socket.id].betAmount = bet;
+      room.players[socket.id].money -= bet;
+
+      if (Object.keys(room.players).every((x) => room.players[x].betPlaced)){
+         newHand(room);
+      }
    });
 
    // Handle a hit request
@@ -144,9 +155,11 @@ function createRooms(){
          dealer: dealer,
          positions: createPositions(),
          deck: shuffleDeck(createDeck()),
+         turn: {inProgress: false, pos: 0},
          private: false
       };
       rooms[room.id] = room;
+      defaultRooms.push(room.id);
    }
 }
 
@@ -155,9 +168,9 @@ function createDeck() {
    console.log('createDeck');
    let deck = [];
    for (let i = 0; i < shoeSize; i++) {
-      for (suit in suits) {
-         for (value in values) {
-            let card = { Value: values[value], Suit: suits[suit]};
+      for (suit of suits) {
+         for (value of values) {
+            let card = { Value: value, Suit: suit};
             deck.push(card);
          }
       }
@@ -206,17 +219,20 @@ function getNextCard(deck) {
 }
 
 function newHand(room) {
-   if (room.turnInProgress) return;
-   room.turnInProgress = false;
+   console.log('newHand');
+   if (room.turn.inProgress) return;
+   room.turn.inProgress = false;
+   room.turn.pos = -1;
+   Object.keys(room.players).forEach(id => room.players[id].betPlaced = false);
    generateHands(room);
    io.in(room.id).emit('dealHands', room.players, room.dealer);
-   nextTurn(room, 0);
+   nextTurn(room);
 }
 
 // Generates a new hand for each player and the dealer
 function generateHands(room) {
    console.log('generateHands');
-   if (room.turnInProgress) return;
+   if (room.turn.inProgress) return;
 
    // Take away each players cards
    for (let pos = 0; pos < maxSeats; pos++) {
@@ -236,26 +252,25 @@ function generateHands(room) {
    }
 }
 
-function nextTurn(room, i) {
-   room.turnInProgress = false;
+function nextTurn(room) {
+   room.turn.inProgress = false;
+   let i = room.turn.pos + 1;
    for (i; i < room.positions.length; i++) {
-      if (room.positions[i].hasPlayer && !room.turnInProgress) {
+      if (room.positions[i].hasPlayer && !room.turn.inProgress) {
          io.in(room.id).emit('startTurn', i);
-         room.turnInProgress = true;
+         room.turn.inProgress = true;
+         room.turn.pos = i;
       }
    }
-   if (!room.turnInProgress) {
+   if (!room.turn.inProgress) {
       let dealerTotal = getDealersHand(room, room.dealer);
       Object.keys(room.players).forEach(id => {
          let player = room.players[id];
          for (hand in player.hands){
-            console.log(player, hand, dealerTotal);
             let win = winStatus(player, hand, dealerTotal);
-            console.log(win);
             io.to(player.playerId).emit('winStatus', room.dealer, win);
          }
-      })
-      newHand(room);
+      });
    }
 }
 
@@ -264,8 +279,6 @@ function dealCard(playerInfo, card, hand) {
    console.log('dealCard');
    playerInfo.hands[hand].cards.push(card);
    playerInfo.hands[hand].total = calculatePlayerTotal(playerInfo.hands[hand].cards);
-   console.log(card);
-   console.log(playerInfo.hands[hand].total);
 }
 
 function calculatePlayerTotal (cards) {
